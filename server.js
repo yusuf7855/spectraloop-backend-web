@@ -1,8 +1,11 @@
-// server.js - Complete SpectraLoop Backend
+// server.js - Complete SpectraLoop Backend with Image Upload
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const PORT = 5000;
@@ -14,10 +17,47 @@ const ADMIN_CREDENTIALS = {
     password: 'admin'
 };
 
+// Create uploads directory if it doesn't exist
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Multer configuration for file uploads
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, 'uploads/');
+    },
+    filename: function (req, file, cb) {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, 'blog-' + uniqueSuffix + path.extname(file.originalname));
+    }
+});
+
+const fileFilter = (req, file, cb) => {
+    // Accept only image files
+    if (file.mimetype.startsWith('image/')) {
+        cb(null, true);
+    } else {
+        cb(new Error('Only image files are allowed!'), false);
+    }
+};
+
+const upload = multer({
+    storage: storage,
+    fileFilter: fileFilter,
+    limits: {
+        fileSize: 5 * 1024 * 1024 // 5MB limit
+    }
+});
+
 // Middleware
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Serve static files (uploaded images)
+app.use('/uploads', express.static('uploads'));
 
 // MongoDB Connection
 mongoose.connect('mongodb+srv://221118047:221118047@cluster0.wb6g5u1.mongodb.net/spectraloop?retryWrites=true&w=majority&appName=Cluster0', {
@@ -108,7 +148,7 @@ const applicationSchema = new mongoose.Schema({
 
 const Application = mongoose.model('Application', applicationSchema);
 
-// Blog Schema
+// Blog Schema - Updated with image field
 const blogSchema = new mongoose.Schema({
     title: {
         type: String,
@@ -137,7 +177,11 @@ const blogSchema = new mongoose.Schema({
     },
     image: {
         type: String,
-        default: '/src/assets/images/spec1.jpg'
+        default: null
+    },
+    imageUrl: {
+        type: String,
+        default: null
     },
     readTime: {
         type: String,
@@ -270,6 +314,38 @@ app.get('/api/admin/stats', authenticateAdmin, async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Failed to fetch stats'
+        });
+    }
+});
+
+// Image Upload Route
+app.post('/api/upload', authenticateAdmin, upload.single('image'), (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({
+                success: false,
+                message: 'No file uploaded'
+            });
+        }
+
+        const imageUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+        
+        res.json({
+            success: true,
+            message: 'Image uploaded successfully',
+            data: {
+                filename: req.file.filename,
+                originalname: req.file.originalname,
+                mimetype: req.file.mimetype,
+                size: req.file.size,
+                url: imageUrl
+            }
+        });
+    } catch (error) {
+        console.error('Image upload error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to upload image'
         });
     }
 });
@@ -448,7 +524,7 @@ app.get('/api/blogs/:slug', async (req, res) => {
     }
 });
 
-// Create blog (Admin only)
+// Create blog (Admin only) - Updated for image support
 app.post('/api/blogs', authenticateAdmin, async (req, res) => {
     try {
         const blogData = req.body;
@@ -496,7 +572,7 @@ app.post('/api/blogs', authenticateAdmin, async (req, res) => {
     }
 });
 
-// Update blog (Admin only)
+// Update blog (Admin only) - Updated for image support
 app.put('/api/blogs/:id', authenticateAdmin, async (req, res) => {
     try {
         const blogData = req.body;
@@ -555,6 +631,15 @@ app.delete('/api/blogs/:id', authenticateAdmin, async (req, res) => {
                 success: false,
                 message: 'Blog not found'
             });
+        }
+        
+        // Delete associated image file if exists
+        if (blog.image) {
+            const imagePath = path.join(__dirname, 'uploads', blog.image);
+            if (fs.existsSync(imagePath)) {
+                fs.unlinkSync(imagePath);
+                console.log('Deleted image file:', blog.image);
+            }
         }
         
         console.log('Blog deleted:', blog._id);
